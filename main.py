@@ -1,8 +1,9 @@
 import sys
 import webbrowser
+from functools import partial
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QMessageBox, QInputDialog,
-    QTableWidgetItem, QWidget, QHBoxLayout, QPushButton
+    QTableWidgetItem, QCheckBox
 )
 from PyQt6.QtCore import Qt
 from ui.player_ui import Ui_MainWindow
@@ -10,6 +11,7 @@ from core.db import Database
 from core.yaml_loader import load_urls_from_file
 from core.video_utils import download_video, get_video_info
 from core.export import export_playlist_to_m3u
+
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -23,7 +25,7 @@ class MainApp(QMainWindow):
 
         # Estado
         self.playlist = []  # lista de dicts: {'page_url', 'url', 'title', 'valid', 'favorite'}
-        self.current_session = None
+        self.current_session = None  # nome da sessão carregada/salva
 
         # Setup UI
         self.setup_connections()
@@ -53,10 +55,10 @@ class MainApp(QMainWindow):
         url, ok = QInputDialog.getText(self, "Adicionar URL manualmente", "Digite a URL do vídeo:")
         if ok and url:
             video = {
-                'title': 'Título manual',
+                'title': url,
                 'page_url': url,
                 'url': '',
-                'valid': True,
+                'valid': False,
                 'favorite': False
             }
             self.playlist.append(video)
@@ -75,31 +77,40 @@ class MainApp(QMainWindow):
 
     def refresh_playlist_ui(self):
         self.ui.lstPlaylist.setRowCount(0)
+
         for i, video in enumerate(self.playlist):
             self.ui.lstPlaylist.insertRow(i)
 
-            self.ui.lstPlaylist.setItem(i, 0, QTableWidgetItem(video.get('title') or ''))
-            self.ui.lstPlaylist.setItem(i, 1, QTableWidgetItem(video.get('page_url') or ''))
-            self.ui.lstPlaylist.setItem(i, 2, QTableWidgetItem(video.get('url') or ''))
+            # Título
+            title_item = QTableWidgetItem(video.get("title") or "")
+            self.ui.lstPlaylist.setItem(i, 0, title_item)
 
-            chk_valid = QTableWidgetItem("✔" if video.get('valid') else "✖")
-            chk_valid.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.ui.lstPlaylist.setItem(i, 3, chk_valid)
+            # Página (page_url)
+            page_item = QTableWidgetItem(video.get("page_url") or "")
+            self.ui.lstPlaylist.setItem(i, 1, page_item)
 
-            chk_fav = QTableWidgetItem("★" if video.get('favorite') else "")
-            chk_fav.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.ui.lstPlaylist.setItem(i, 4, chk_fav)
+            # URL direta
+            url_item = QTableWidgetItem(video.get("url") or "")
+            self.ui.lstPlaylist.setItem(i, 2, url_item)
 
-            btn_widget = QWidget()
-            btn_layout = QHBoxLayout(btn_widget)
-            btn_layout.setContentsMargins(0, 0, 0, 0)
+            # Válido ✔️ ou ✖
+            valid = video.get("valid", False)
+            valid_item = QTableWidgetItem("✔" if valid else "✖")
+            valid_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.ui.lstPlaylist.setItem(i, 3, valid_item)
 
-            btn_del = QPushButton("Excluir")
-            btn_del.clicked.connect(lambda _, idx=i: self.remove_item(idx))
-            btn_layout.addWidget(btn_del)
+            # Favorito (QCheckBox)
+            fav_checkbox = QCheckBox()
+            fav_checkbox.setChecked(video.get("favorite", False))
+            fav_checkbox.setStyleSheet("margin-left:10px; margin-right:10px;")
+            self.ui.lstPlaylist.setCellWidget(i, 4, fav_checkbox)
 
-            btn_widget.setLayout(btn_layout)
-            self.ui.lstPlaylist.setCellWidget(i, 5, btn_widget)
+            def on_favorite_changed(state, index=i):
+                self.playlist[index]["favorite"] = (state == Qt.CheckState.Checked)
+                if self.current_session:
+                    self.db.save_session(self.current_session, self.playlist)
+
+            fav_checkbox.stateChanged.connect(partial(on_favorite_changed, index=i))
 
     def validate_playlist(self):
         for item in self.playlist:
@@ -148,11 +159,6 @@ class MainApp(QMainWindow):
         self.playlist = []
         self.refresh_playlist_ui()
 
-    def remove_item(self, index):
-        if 0 <= index < len(self.playlist):
-            del self.playlist[index]
-            self.refresh_playlist_ui()
-
     def play_video(self, item):
         index = item.row()
         url = self.playlist[index]['page_url']
@@ -162,15 +168,19 @@ class MainApp(QMainWindow):
         name, ok = QInputDialog.getText(self, "Salvar Sessão", "Nome da sessão:")
         if not ok or not name.strip():
             return
-        self.db.save_session(name.strip(), self.playlist)
+        name = name.strip()
+        self.current_session = name
+        self.db.save_session(name, self.playlist)
         self.load_sessions()
-        QMessageBox.information(self, "Sessão", f"Sessão '{name.strip()}' salva com sucesso.")
+        QMessageBox.information(self, "Sessão", f"Sessão '{name}' salva com sucesso.")
 
     def load_sessions(self):
         sessions = self.db.list_sessions()
+        self.ui.cmbSessions.blockSignals(True)
         self.ui.cmbSessions.clear()
         self.ui.cmbSessions.addItem("-- Selecione Sessão --")
         self.ui.cmbSessions.addItems(sessions)
+        self.ui.cmbSessions.blockSignals(False)
 
     def load_session_from_dropdown(self, index):
         if index == 0:
@@ -179,7 +189,9 @@ class MainApp(QMainWindow):
         playlist = self.db.load_session(name)
         if playlist is not None:
             self.playlist = playlist
+            self.current_session = name
             self.refresh_playlist_ui()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
