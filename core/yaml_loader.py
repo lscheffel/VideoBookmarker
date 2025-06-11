@@ -1,21 +1,14 @@
-import yaml
+import os
+from typing import List
 
-def load_yaml_file(file_path):
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
-
-        if isinstance(data, list):
-            return data
-
-        elif isinstance(data, str):
-            # Tenta dividir a string em linhas, se for um blob de texto
-            lines = [line.strip() for line in data.splitlines() if line.strip()]
-            return lines
-
-        else:
-            return []
-
-    except Exception as e:
-        print(f"Erro ao carregar YAML: {e}")
+def load_urls_from_file(file_path: str) -> List[str]:
+    if not os.path.exists(file_path):
         return []
+
+    urls = []
+    with open(file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and line.startswith("http"):
+                urls.append(line)
+    return urls
