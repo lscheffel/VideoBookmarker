@@ -1,8 +1,10 @@
 import sys
 import webbrowser
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QFileDialog, QMessageBox, QInputDialog
+    QApplication, QMainWindow, QFileDialog, QMessageBox, QInputDialog,
+    QTableWidgetItem, QWidget, QHBoxLayout, QPushButton
 )
+from PyQt6.QtCore import Qt
 from ui.player_ui import Ui_MainWindow
 from core.db import Database
 from core.yaml_loader import load_urls_from_file
@@ -20,7 +22,7 @@ class MainApp(QMainWindow):
         self.db.create_tables()
 
         # Estado
-        self.playlist = []  # lista de dicts: {'url', 'title', 'valid', 'favorite'}
+        self.playlist = []  # lista de dicts: {'page_url', 'url', 'title', 'valid', 'favorite'}
         self.current_session = None
 
         # Setup UI
@@ -48,58 +50,94 @@ class MainApp(QMainWindow):
         self.refresh_playlist_ui()
 
     def add_url_manually(self):
-        url, ok = QInputDialog.getText(self, "Adicionar URL", "Insira a URL do vídeo:")
-        if ok and url.strip():
-            self.add_to_playlist(url.strip())
+        url, ok = QInputDialog.getText(self, "Adicionar URL manualmente", "Digite a URL do vídeo:")
+        if ok and url:
+            video = {
+                'title': 'Título manual',
+                'page_url': url,
+                'url': '',
+                'valid': True,
+                'favorite': False
+            }
+            self.playlist.append(video)
             self.refresh_playlist_ui()
 
     def add_to_playlist(self, url):
-        if any(item['url'] == url for item in self.playlist):
+        if any(item['page_url'] == url for item in self.playlist):
             return  # evitar duplicatas
-        self.playlist.append({'url': url, 'title': None, 'valid': None, 'favorite': False})
+        self.playlist.append({
+            'page_url': url,
+            'url': None,
+            'title': None,
+            'valid': None,
+            'favorite': False
+        })
 
     def refresh_playlist_ui(self):
-        self.ui.lstPlaylist.clear()
-        for item in self.playlist:
-            status = "[✓]" if item.get('valid') else "[✗]" if item.get('valid') is False else "[?]"
-            favorite = "★" if item.get('favorite') else " "
-            title = item.get('title') or item['url']
-            display_text = f"{favorite} {status} {title}"
-            self.ui.lstPlaylist.addItem(display_text)
+        self.ui.lstPlaylist.setRowCount(0)
+        for i, video in enumerate(self.playlist):
+            self.ui.lstPlaylist.insertRow(i)
+
+            self.ui.lstPlaylist.setItem(i, 0, QTableWidgetItem(video.get('title') or ''))
+            self.ui.lstPlaylist.setItem(i, 1, QTableWidgetItem(video.get('page_url') or ''))
+            self.ui.lstPlaylist.setItem(i, 2, QTableWidgetItem(video.get('url') or ''))
+
+            chk_valid = QTableWidgetItem("✔" if video.get('valid') else "✖")
+            chk_valid.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.ui.lstPlaylist.setItem(i, 3, chk_valid)
+
+            chk_fav = QTableWidgetItem("★" if video.get('favorite') else "")
+            chk_fav.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.ui.lstPlaylist.setItem(i, 4, chk_fav)
+
+            btn_widget = QWidget()
+            btn_layout = QHBoxLayout(btn_widget)
+            btn_layout.setContentsMargins(0, 0, 0, 0)
+
+            btn_del = QPushButton("Excluir")
+            btn_del.clicked.connect(lambda _, idx=i: self.remove_item(idx))
+            btn_layout.addWidget(btn_del)
+
+            btn_widget.setLayout(btn_layout)
+            self.ui.lstPlaylist.setCellWidget(i, 5, btn_widget)
 
     def validate_playlist(self):
         for item in self.playlist:
-            # Considera a URL como sendo a da página do Xvideos
-            info = get_video_info(item['url'])
+            info = get_video_info(item['page_url'])
             if info:
                 item['valid'] = True
-                item['title'] = info['title'] or item['url']
-                item['url'] = info['high']  # substitui pela URL .mp4 real
+                item['title'] = info.get('title') or item['page_url']
+                item['url'] = info.get('high')
             else:
                 item['valid'] = False
         self.refresh_playlist_ui()
+
     def download_selected(self):
-        selected_items = self.ui.lstPlaylist.selectedItems()
-        if not selected_items:
+        selected_rows = set(index.row() for index in self.ui.lstPlaylist.selectedIndexes())
+        if not selected_rows:
             QMessageBox.warning(self, "Download", "Selecione um vídeo na lista para baixar.")
             return
+
         folder = QFileDialog.getExistingDirectory(self, "Escolha a pasta para salvar")
         if not folder:
             return
-        for selected_item in selected_items:
-            index = self.ui.lstPlaylist.row(selected_item)
-            video_data = self.playlist[index]
+
+        for row in selected_rows:
+            video_data = self.playlist[row]
+            if not video_data.get('url'):
+                QMessageBox.warning(self, "Download", f"URL de vídeo inválida: {video_data['page_url']}")
+                continue
             path = download_video(video_data['url'], folder)
             if path:
                 QMessageBox.information(self, "Download", f"Vídeo baixado: {path}")
             else:
-                QMessageBox.warning(self, "Download", f"Falha ao baixar: {video_data['url']}")
+                QMessageBox.warning(self, "Download", f"Falha ao baixar: {video_data['page_url']}")
 
     def export_playlist(self):
         path, _ = QFileDialog.getSaveFileName(self, "Exportar Playlist", "", "M3U Files (*.m3u)")
         if not path:
             return
-        urls = [item['url'] for item in self.playlist]
+        urls = [item['url'] for item in self.playlist if item.get('url')]
         success = export_playlist_to_m3u(urls, path)
         if success:
             QMessageBox.information(self, "Exportar", "Playlist exportada com sucesso.")
@@ -110,16 +148,20 @@ class MainApp(QMainWindow):
         self.playlist = []
         self.refresh_playlist_ui()
 
+    def remove_item(self, index):
+        if 0 <= index < len(self.playlist):
+            del self.playlist[index]
+            self.refresh_playlist_ui()
+
     def play_video(self, item):
-        index = self.ui.lstPlaylist.row(item)
-        url = self.playlist[index]['url']
+        index = item.row()
+        url = self.playlist[index]['page_url']
         webbrowser.open(url)
 
     def save_current_session(self):
         name, ok = QInputDialog.getText(self, "Salvar Sessão", "Nome da sessão:")
         if not ok or not name.strip():
             return
-        # Salva a sessão no banco com a playlist atual
         self.db.save_session(name.strip(), self.playlist)
         self.load_sessions()
         QMessageBox.information(self, "Sessão", f"Sessão '{name.strip()}' salva com sucesso.")
@@ -138,7 +180,6 @@ class MainApp(QMainWindow):
         if playlist is not None:
             self.playlist = playlist
             self.refresh_playlist_ui()
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

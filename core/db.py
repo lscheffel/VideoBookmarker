@@ -22,7 +22,8 @@ class Database:
             CREATE TABLE IF NOT EXISTS videos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
-                url TEXT NOT NULL,
+                page_url TEXT NOT NULL,
+                url TEXT,
                 title TEXT,
                 valid INTEGER,
                 favorite INTEGER,
@@ -46,10 +47,11 @@ class Database:
         # Insere os vídeos da playlist
         for item in playlist:
             c.execute('''
-                INSERT INTO videos (session_id, url, title, valid, favorite)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO videos (session_id, page_url, url, title, valid, favorite)
+                VALUES (?, ?, ?, ?, ?, ?)
             ''', (
                 session_id,
+                item.get('page_url'),
                 item.get('url'),
                 item.get('title'),
                 1 if item.get('valid') else 0,
@@ -71,17 +73,18 @@ class Database:
         if not session_row:
             return None
         session_id = session_row['id']
-        c.execute('SELECT url, title, valid, favorite FROM videos WHERE session_id = ?', (session_id,))
+        c.execute('SELECT page_url, url, title, valid, favorite FROM videos WHERE session_id = ?', (session_id,))
         rows = c.fetchall()
         playlist = []
         for row in rows:
             playlist.append({
+                'page_url': row['page_url'],
                 'url': row['url'],
                 'title': row['title'],
                 'valid': bool(row['valid']),
                 'favorite': bool(row['favorite'])
             })
         return playlist
-
     def close(self):
         self.conn.close()
+
